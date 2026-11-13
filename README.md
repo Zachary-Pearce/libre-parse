@@ -1,7 +1,7 @@
 # LibreParse
 LibreParse is an open and approachable parser generator for LL(1) grammars. It accepts a formal grammar written in EBNF and generates a parse table and set of token regular expressions, which can then be used to tokenize and parse any text.
 
-The code has been kept as simple as possible without compromising performance. You won't find any unnecessary features here.
+The code has been kept as simple as possible without compromising performance. In addition, this project requires no external libraries.
 
 ## Installation
 LibreParse is published as an npm package with the same name as this repository, `libre-parse`. Use the following command to install it:
