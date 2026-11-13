@@ -1,0 +1,25 @@
+{
+    "name": "libre-parse",
+    "description": "Javascript runtime for LibreParse",
+    "version": "0.1.0",
+    "type": "module",
+    "main": "./index.js",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/Zachary-Pearce/libre-parse.git"
+    },
+    "keywords": [
+        "lexer",
+        "parser",
+        "parser generator",
+        "grammar",
+        "LibreParse",
+        "libre-parse"
+    ],
+    "author": "Zachary Pearce",
+    "license": "GPL-3.0-only",
+    "bugs": {
+        "url": "https://github.com/Zachary-Pearce/libre-parse/issues"
+    },
+    "homepage": "https://github.com/Zachary-Pearce/libre-parse"
+}
