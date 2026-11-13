@@ -50,7 +50,7 @@ export default class Generator {
      * Get the literal value of a terminal at the given text position.
      * 
      * @param {Number} pos - The position of the single or double quote marker.
-     * @returns {String} The terminal character.
+     * @returns {String} The terminal string.
      */
     _getLiteralValue(pos) {
         const idTreeFrag = this.ast.getTreeFragment(pos, 9);
@@ -82,14 +82,13 @@ export default class Generator {
         
         const start = pos;
         let end = start;
-        idTreeFrag.on('nodeVisited', (node) => {
+        const handleNodeVisted = (node) => {
             end = node.pos > end ? node.pos : end;
-        });
+        }
 
-        //The tree fragment will give you the parent node above what you are searching for
-        //so we go one level deeper before traversal
-        // const literalBranchIndex = idTreeFrag.branchSearch(pos);
+        idTreeFrag.on('nodeVisited', handleNodeVisted);
         idTreeFrag.traverse();
+        idTreeFrag.off('nodeVisited', handleNodeVisted);
         return [start, end];
     }
 
@@ -144,18 +143,18 @@ export default class Generator {
                     break;
 
                 case 11: //modifiers (*, +, ?)
-                    if (node.children[0].val === 24) {
+                    if (node.children[0].val === 27) {
                         result = '?';
-                    } else if (node.children[0].val === 25) {
+                    } else if (node.children[0].val === 28) {
                         result = '*';
-                    } else if (node.children[0].val === 26) {
+                    } else if (node.children[0].val === 29) {
                         result = '+';
                     }
                     break;
 
                 case 12: //join factors with modifiers
                     if (['?', '*', '+'].includes(childResults[1])) {
-                        result = `[${childResults[0]}]${childResults[1]}`;
+                        result = `(${childResults[0]})${childResults[1]}`;
                     //TODO: add logic for handling minus modifier
                     } else {
                         result = childResults.join('');
@@ -324,7 +323,7 @@ export default class Generator {
                         char = stringRule[i];
                     }
                     //we will create a rule substring for the group then compile this
-                    const groupRules = this._compileProd(stringRule.substring(start, i));
+                    const groupRules = this._compileProd(stringRule.slice(start, i));
                     //there are two cases here, either:
                     // - there are multiple production rules produced
                     if (groupRules.length > 1) {
@@ -481,6 +480,7 @@ export default class Generator {
      * 
      * @returns {Object.<number, RegExp>} tokenRegex
      * @returns {Object.<number, Object.<number, Array<number>>>} parseTable
+     * @returns {Number} startSymbol
      */
     compile() {
         /**
@@ -500,6 +500,7 @@ export default class Generator {
 
         //first pass
         this.productionRules = {};
+        let startSymbol = null;
         for (const i of linePositions) {
             const [start, end] = this._getIdentifierLiteral(i);
             const symbol = this.sourceText.substring(start, end + 1);
@@ -517,6 +518,14 @@ export default class Generator {
                     this.productionRules[this.rulePointer] = new Array();
                     this.productionRules[this.rulePointer].push(...prodRules);
                     this._addToSymbolTable(symbol);
+                }
+
+                if (symbol.slice(-1) === "_") {
+                    if (startSymbol) { //if a start symbol is already defined...
+                        throw new SyntaxError(`Multiple start symbols defined: ${startSymbol} and ${symbol}`);
+                    }
+                    //allocate start symbol
+                    startSymbol = this.symbolTable[symbol];
                 }
             } else {
                 //terminals after being processed will return a token regex expression.
@@ -536,7 +545,7 @@ export default class Generator {
             const entry = {};
             const first = this._getFirstSet(Number(symbol));
 
-            //to get the first set we need to loop through each first symbol in first
+            //to get the parse table entry we need to loop through each first symbol in first
             for (const fst of first) {
                 if (fst === Token.EMPTY) { continue; }
 
@@ -568,10 +577,8 @@ export default class Generator {
 
             this.parseTable[symbol] = entry;
         }
-        
-        console.log(this.parseTable);
 
         //then finally we can return the token regex and parse table.
-        return [this.tokenRegex, this.parseTable];
+        return [this.tokenRegex, this.parseTable, startSymbol];
     }
 }

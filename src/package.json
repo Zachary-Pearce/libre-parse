@@ -4,6 +4,9 @@
     "version": "0.1.0",
     "type": "module",
     "main": "./index.js",
+    "scripts": {
+        "test": "node ../test/gen_test.mjs"
+    },
     "repository": {
         "type": "git",
         "url": "https://github.com/Zachary-Pearce/libre-parse.git"
