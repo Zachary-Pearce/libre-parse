@@ -232,7 +232,6 @@ const gen = new Generator(parseTree, source);
 
 const [ actualTokenizer, actualParseTable, actualStartSymbol ] = gen.compile();
 
-console.log("Running tests...");
 console.log("\x1b[44mINFO\x1b[0m Simple Parser - Mathematics, /examples/math.ebnf");
 
 try {
