@@ -1,5 +1,6 @@
 import { Tree } from '../parsing/tree.js';
 import Token from '../parsing/token.js';
+import Rule from './rule.js';
 
 export default class Generator {
     /**
@@ -31,6 +32,16 @@ export default class Generator {
         this.rulePointer = 1;
 
         /**
+         * @type {Object.<number, Set<Rule>>} A table to keep track of which tokens are present in which rules.
+         */
+        this._terminalToRules = {};
+
+        /**
+         * @type {Array<Rule>} An array of all the production rules that have been created.
+         */
+        this._prodRules = [];
+
+        /**
          * @type {Object.<Number, Array<Array<Number>>>} The production rules.
          */
         this.productionRules = {};
@@ -44,31 +55,6 @@ export default class Generator {
      */
     _escapeRegex(str) {
         return str.replace(/[.*+?^${}()|\[\]\\]/g, '\\$&');
-    }
-
-    /**
-     * Get the literal value of a terminal at the given text position.
-     * 
-     * @param {Number} pos - The position of the single or double quote marker.
-     * @returns {String} The terminal string.
-     */
-    _getLiteralValue(pos) {
-        const idTreeFrag = this.ast.getTreeFragment(pos, 9);
-
-        const start = pos;
-        let end = start;
-        const quoteVal = idTreeFrag.root.children[0].val;
-        const handleNodeVisted = (node) => {
-            if (node.val === quoteVal && node.pos > start) {
-                end = node.pos
-                idTreeFrag.off('nodeVisited', handleNodeVisted);
-            }
-        }
-
-        idTreeFrag.on('nodeVisited', handleNodeVisted);
-        idTreeFrag.traverse();
-        //return literal text not including first quote char
-        return this.sourceText.substring(start + 1, end);
     }
 
     /**
@@ -112,6 +98,30 @@ export default class Generator {
     }
 
     /**
+     * Add a given rule to the array.
+     * 
+     * @param {Rule} rule
+     */
+    _addRule(rule) {
+        if (rule.rhs.length > 0) {
+            this._prodRules.push(rule);
+        }
+    }
+
+    /**
+     * Register a given rule to a terminal symbol.
+     * 
+     * @param {Rule} rule - The rule object to register.
+     * @param {Number} terminal - The terminal to register it to.
+     */
+    _registerRule(rule, terminal) {
+        if (!this._terminalToRules[terminal]) {
+            this._terminalToRules[terminal] = new Set();
+        }
+        this._terminalToRules[terminal].add(rule);
+    }
+
+    /**
      * Compile a line's tree fragment into a single RegExp.
      * 
      * @param {Number} pos - The position of the line in the grammar definition.
@@ -130,8 +140,14 @@ export default class Generator {
 
             switch(node.val) {
                 case 9:
-                    const terminal = this._getLiteralValue(node.pos);
+                    const terminal = childResults.join('');
                     result = this._escapeRegex(terminal);
+                    break;
+
+                case 3:
+                case 4:
+                    //there is only ever one child here
+                    result = this.sourceText[node.children[0].pos];
                     break;
 
                 case 13: //alternation ("|")
@@ -186,7 +202,6 @@ export default class Generator {
     _getProdRule(pos) {
         const treeFragment = this.ast.getTreeFragment(pos, 2);
 
-        let test = [];
         const nodeResults = new Map();
         let skippedLhs = false;
         const nodeVisted = (node) => {
@@ -214,7 +229,6 @@ export default class Generator {
                     break;
 
                 case 13: //alteration ("|")
-                    // result = childResults.join('|');
                     result = childResults.reduce((acc, curr, i) => {
                         if (i > 0) { acc.push("|") };
                         return acc.concat(curr);
@@ -227,50 +241,49 @@ export default class Generator {
                         break;
                     }
 
-                    const [start, end] = this._getIdentifierLiteral(node.pos);
-                    const literal = this.sourceText.substring(start, end + 1);
+                    const literal = `${this.sourceText[node.pos]}${childResults.join('')}`;
                     if (!this.symbolTable[literal]) {
                         this._addToSymbolTable(literal);
                     }
                     result = this.symbolTable[literal];
                     break;
                 
+                case 8: //identifier character
+                    result = `${this.sourceText[node.children[0].pos]}${childResults.join('')}`
+                    break;
+                
                 case 9: //terminal
-                    const terminal = this._getLiteralValue(node.pos);
+                    let terminal = "";
+                    for (const string of childResults) {
+                        if (string.length > 0) {
+                            terminal = string.join('');
+                            break;
+                        }
+                    }
+
                     //create a new token regex for the terminal
                     const escapedTerminal = this._escapeRegex(terminal);
-                    const regex = new RegExp(this._escapeRegex(escapedTerminal));
+                    const replacer = new RegExp(this._escapeRegex(escapedTerminal));
+
                     //does the terminal already exist in the symbol table?
                     if (this.symbolTable[terminal]) {
                         result = this.symbolTable[terminal];
                     } else {
-                        //if not, check if terminal already exists in a token regex
-                        for (const id of Object.keys(this.tokenRegex)) {
-                            if (this.tokenRegex[id].source.includes(escapedTerminal)) {
-                                //if it exists, we need to remove it from the regex
-                                let newRegex = this.tokenRegex[id].source;
-                                newRegex = newRegex.replace(regex, "");             //rid of the terminal from the existing pattern
+                        for (const [id, regex] of Object.entries(this.tokenRegex)) {
+                            if (regex.source.includes(escapedTerminal)) {
+                                let newRegex = regex.source;
+                                newRegex = newRegex.replace(replacer, "");
                                 newRegex = newRegex.replace(/(?<!\\)\|{2,}/g, "|"); //get rid of chains of consecutive "|"
                                 newRegex = newRegex.replace(/^[\|]+|[\|]+$/g, "");  //get rid of trailing and leading "|"
 
-                                //if we have removed tokens from an existing regex then the current production rules need to be updated to include these
-                                //  e.g. Character | "_" | " " -> Character | "," | "_" | " " when "," is separated
                                 const termVal = this.rulePointer;
-                                for (const [lhs, rules] of Object.entries(this.productionRules)) {
-                                    for (const rhs of rules) {
-                                        let change = false;
-                                        const temp = Array.from(rhs);
-                                        for (let i = 0; i < temp.length; i++) {
-                                            if (temp[i] === Number(id)) {
-                                                temp[i] = termVal;
-                                                change = true;
-                                            }
-                                        }
+                                for (const rule of this._terminalToRules[id]) {
+                                    let newRhs = rule.rhs;
+                                    newRhs = newRhs.map((symbol) => symbol === Number(id) ? termVal : symbol );
 
-                                        if (change) {
-                                            this.productionRules[lhs].push(temp);
-                                        }
-                                    }
+                                    const newRule = new Rule(rule.lhs, newRhs);
+                                    this._addRule(newRule);
+                                    this._registerRule(newRule, termVal);
                                 }
 
                                 this.tokenRegex[id] = new RegExp(newRegex);
@@ -283,9 +296,15 @@ export default class Generator {
                         this._addToSymbolTable(terminal);
                     }
                     break;
+                
+                //terminal character
+                case 3:
+                case 4:
+                    //there is only ever one child here
+                    result = this.sourceText[node.children[0].pos];
+                    break;
 
                 default: {
-                    // result = childResults.join('');
                     result = childResults.flat();
                     break;
                 }
@@ -304,12 +323,12 @@ export default class Generator {
     /**
      * Compile a string-form production rule.
      * 
-     * @param {String} stringRule
-     * @returns {Array<Array<Number>>} The compiled production rules.
+     * @param {Array<String>} stringRule
+     * @param {Number} lhs - The ID of the affected non-terminal symbol.
+     * @returns {Array<Rule>} The compiled production rules.
      */
-    _compileProd(stringRule) {
-        const prodRules = new Array();
-        let rule = [];
+    _compileProd(stringRule, lhs) {
+        let currRule = new Rule(lhs, new Array());
 
         let i = 0;
         while (i < stringRule.length) {
@@ -322,22 +341,10 @@ export default class Generator {
                         i++;
                         char = stringRule[i];
                     }
-                    //we will create a rule substring for the group then compile this
-                    const groupRules = this._compileProd(stringRule.slice(start, i));
-                    //there are two cases here, either:
-                    // - there are multiple production rules produced
-                    if (groupRules.length > 1) {
-                        //a new non-terminal would need to be created here
-                        //we do not need to add this to the symbol table though
-                        this.productionRules[this.rulePointer] = new Array();
-                        this.productionRules[this.rulePointer].push(...groupRules);
-                        rule = [this.rulePointer];
-                        this.rulePointer++;
-                    // - or just one production rule is produced
-                    } else {
-                        //can be appended at the next '|' character
-                        rule = groupRules[0];
-                    }
+                    //compile this segment separately
+                    this._compileProd(stringRule.slice(start, i), this.rulePointer);
+                    currRule.addToRhs(this.rulePointer);
+                    this.rulePointer++;
                     break;
 
                 //zero or more group
@@ -346,16 +353,20 @@ export default class Generator {
                         i++;
                         char = stringRule[i];
                     }
-                    //we will create a rule substring for the group then compile this
-                    const repRules = this._compileProd(stringRule.slice(start, i));
-                    //in this case we will always create a new rule
-                    repRules.map((rule) => { rule.push(this.rulePointer); });
-                    repRules.push([Token.EMPTY]);
-                    this.productionRules[this.rulePointer] = new Array();
-                    this.productionRules[this.rulePointer].push(...repRules);
-                    rule.push(this.rulePointer);
+                    //compile this segment separately, lhs is a new symbol
+                    this._compileProd(stringRule.slice(start, i), this.rulePointer);
+                    //add the recursive element to the end of the new rule(s)
+                    for (const rule of this._prodRules) {
+                        if (rule.lhs === this.rulePointer) {
+                            rule.addToRhs(this.rulePointer);
+                        }
+                    }
+                    //add empty rule to new symbol
+                    this._addRule(new Rule(this.rulePointer, [Token.EMPTY]));
+                    //reference the new symbol in the current rule
+                    currRule.addToRhs(this.rulePointer);
                     this.rulePointer++;
-                break;
+                    break;
 
                 //optional group
                 case '[':
@@ -363,35 +374,32 @@ export default class Generator {
                         i++;
                         char = stringRule[i];
                     }
-                    //we will create a rule substring for the group then compile this
-                    const opRules = this._compileProd(stringRule.slice(start, i));
-                    opRules.push([Token.EMPTY]);
-                    //in this case we will always create a new rule
-                    //a new non-terminal would need to be created here
-                    //we do not need to add this to the symbol table though
-                    this.productionRules[this.rulePointer] = new Array();
-                    this.productionRules[this.rulePointer].push(...opRules);
-                    rule = [this.rulePointer];
+                    //compile this segment separately, lhs is a new symbol
+                    this._compileProd(stringRule.slice(start, i), this.rulePointer);
+                    //add empty rule to new symbol
+                    this._addRule(new Rule(this.rulePointer, [Token.EMPTY]));
+                    //reference the new symbol in the current rule
+                    currRule.addToRhs(this.rulePointer);
                     this.rulePointer++;
-                break;
+                    break;
 
                 case '|':
-                    prodRules.push(rule);
-                    rule = [];
+                    this._addRule(currRule);
+                    currRule = new Rule(lhs, new Array());
                     break;
                 
                 default:
-                    rule.push(Number(char));
+                    currRule.addToRhs(Number(char));
+                    this._registerRule(currRule, Number(char));
                     break;
             }
             i++;
         }
 
-        if (rule.length > 0) {
-            prodRules.push(rule);
+        if (currRule.rhs.length > 0) {
+            this._addRule(currRule);
+            currRule = new Rule(lhs, new Array());
         }
-
-        return prodRules;
     }
 
     /**
@@ -490,7 +498,7 @@ export default class Generator {
         //split lines based on the position of the grammar nodes
         const nodeVisted = (node) => {
             //ignore grammar nodes that are empty
-            if (node.val == 1 && node.children.length > 1) {
+            if (node.val == 1) {
                 linePositions.unshift(node.pos);
             }
         };
@@ -506,42 +514,38 @@ export default class Generator {
             const symbol = this.sourceText.substring(start, end + 1);
             //define whether or not we are looking at a non-terminal or terminal definition on this line (using identifier starting with a capital letter)
             if (symbol[0].toUpperCase() === symbol[0]) {
-                //non-terminals after being processed will return an integer array representing the production rule. Done!
-                const stringRules = this._getProdRule(i);
-                const prodRules = this._compileProd(stringRules);
-                //the production rule will need to be stored somewhere for later [lhs (the non-terminal identifier):rhs (the production rule)] for the purposes of calculating first and follow.
-                //we will do this by adding to the productionRules variable with lhs being the numerical id
-                if (this.symbolTable[symbol]) {
-                    this.productionRules[this.symbolTable[symbol]] = new Array();
-                    this.productionRules[this.symbolTable[symbol]].push(...prodRules);
-                } else {
-                    this.productionRules[this.rulePointer] = new Array();
-                    this.productionRules[this.rulePointer].push(...prodRules);
+                if (!this.symbolTable[symbol]) {
                     this._addToSymbolTable(symbol);
                 }
+                const lhs = this.symbolTable[symbol];
+                const stringRules = this._getProdRule(i);
+                this._compileProd(stringRules, lhs);
 
                 if (symbol.slice(-1) === "_") {
                     if (startSymbol) { //if a start symbol is already defined...
-                        throw new SyntaxError(`Multiple start symbols defined: ${startSymbol} and ${symbol}`);
+                        throw new SyntaxError(`Multiple start symbols defined`);
                     }
                     //allocate start symbol
                     startSymbol = this.symbolTable[symbol];
                 }
             } else {
-                //terminals after being processed will return a token regex expression.
                 const regex = this._compileTokenRegex(i);
-                //add token regex to the tokenRegex object using current rule pointer.
                 this._addRegex(regex);
                 this._addToSymbolTable(symbol);
             }
         }
 
+        for (const rule of this._prodRules) {
+            const lhs = rule.lhs;
+            const rhs = rule.rhs;
+            if (!this.productionRules[lhs]) {
+                this.productionRules[lhs] = new Array();
+            }
+            this.productionRules[lhs].push(rhs);
+        }
+
         //second pass
-        //calculate the first and follow sets for each non-terminal symbol.
         for (const symbol of Object.keys(this.productionRules)) {
-            //use the first and follow sets to create the parse table.
-            // follows are used for adding production rules that result in empty tokens.
-            // firsts will be used to decide where production rules will go in the parse table, just need to figure out how we decide what rule goes where.
             const entry = {};
             const first = this._getFirstSet(Number(symbol));
 
@@ -549,7 +553,7 @@ export default class Generator {
             for (const fst of first) {
                 if (fst === Token.EMPTY) { continue; }
 
-                //we find the production rule that relates to this first set
+                //we find the production rule that relates to this first symbol
                 for (const rl of this.productionRules[symbol]) {
                     const sym = rl[0];
                     if (this.productionRules[sym]) {

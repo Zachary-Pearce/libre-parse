@@ -1,6 +1,7 @@
 import Generator from "../src/generator/generator.js";
 import Parser from '../src/parsing/parser.js';
 import { Lexer } from '../src/parsing/lexer.js';
+import { logTime } from '../src/utils/debug.js';
 import * as fs from 'fs';
 import * as assert from 'assert';
 
@@ -199,9 +200,9 @@ const tokenRegex = {
 };
 
 const expectedParseTable = {
-    3: {
+    2: {
         1: [1],
-        2: [2, 3, 4, 3, 5]
+        3: [3, 2, 4, 2, 5]
     },
     4: {
         6: [6],
@@ -211,13 +212,15 @@ const expectedParseTable = {
 
 const expectedTokenizer = {
     1: /(0|1|2|3|4|5|6|7|8|9)+/,
-    2: /\(/,
+    3: /\(/,
     5: /\)/,
     6: /\+/,
     7: /\*/
 };
 
-const expectedStartSymbol = 3;
+const expectedStartSymbol = 2;
+
+console.log("\x1b[44mINFO\x1b[0m Simple Parser - Mathematics, /examples/math.ebnf");
 
 const source = fs.readFileSync('../examples/math.ebnf', 'utf8');
 const lexer = new Lexer(tokenRegex);
@@ -225,14 +228,12 @@ const tokens = lexer.tokeniseAll(source);
 
 const startSymbol = 1;
 const parser = new Parser(tokens, parseTable, startSymbol);
-parser.parse();
+logTime("Parsing Complete", () => parser.parse());
 
 const parseTree = parser.getAST();
 const gen = new Generator(parseTree, source);
 
-const [ actualTokenizer, actualParseTable, actualStartSymbol ] = gen.compile();
-
-console.log("\x1b[44mINFO\x1b[0m Simple Parser - Mathematics, /examples/math.ebnf");
+const [ actualTokenizer, actualParseTable, actualStartSymbol ] = logTime("Compilation Complete", () => gen.compile());
 
 try {
     assert.deepEqual(actualParseTable, expectedParseTable);
