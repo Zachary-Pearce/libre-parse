@@ -42,9 +42,9 @@ export default class Generator {
         this._prodRules = [];
 
         /**
-         * @type {Object.<Number, Array<Array<Number>>>} The production rules.
+         * @type {Set<Number>} A set of all non-terminal symbols.
          */
-        this.productionRules = {};
+        this._nonTerminals = new Set();
     }
 
     /**
@@ -105,6 +105,7 @@ export default class Generator {
     _addRule(rule) {
         if (rule.rhs.length > 0) {
             this._prodRules.push(rule);
+            this._nonTerminals.add(rule.lhs);
         }
     }
 
@@ -344,6 +345,7 @@ export default class Generator {
                     //compile this segment separately
                     this._compileProd(stringRule.slice(start, i), this.rulePointer);
                     currRule.addToRhs(this.rulePointer);
+                    this._registerRule(currRule, this.rulePointer);
                     this.rulePointer++;
                     break;
 
@@ -365,6 +367,7 @@ export default class Generator {
                     this._addRule(new Rule(this.rulePointer, [Token.EMPTY]));
                     //reference the new symbol in the current rule
                     currRule.addToRhs(this.rulePointer);
+                    this._registerRule(currRule, this.rulePointer);
                     this.rulePointer++;
                     break;
 
@@ -380,6 +383,7 @@ export default class Generator {
                     this._addRule(new Rule(this.rulePointer, [Token.EMPTY]));
                     //reference the new symbol in the current rule
                     currRule.addToRhs(this.rulePointer);
+                    this._registerRule(currRule, this.rulePointer);
                     this.rulePointer++;
                     break;
 
@@ -405,21 +409,21 @@ export default class Generator {
     /**
      * Compute the first of a given set of productions.
      * 
-     * @param {Object.<Number, Array<Array<Number>>>} prodRules
      * @param {Number} symbol - The non-terminal symbol.
      * @returns {Array<Number>} The first set.
      */
     _getFirstSet(symbol) {
         const first = new Set();
+        for (const rule of this._prodRules) {
+            if (rule.lhs === symbol) {
+                const term = rule.rhs[0];
 
-        for (const rule of this.productionRules[symbol]) {
-            const term = rule[0];
-
-            if (this.productionRules[term]) {
-                const childFirst = this._getFirstSet(term);
-                childFirst.forEach((f) => {first.add(f)});
-            } else {
-                first.add(term);
+                if (this._nonTerminals.has(term)) {
+                    const childFirst = this._getFirstSet(term);
+                    childFirst.forEach((f) => {first.add(f)});
+                } else {
+                    first.add(term);
+                }
             }
         }
 
@@ -430,52 +434,40 @@ export default class Generator {
      * Compute the follow set for a given non-terminal.
      * 
      * @param {Number} symbol - The non-terminal symbol.
+     * @param {Number} startSymbol - The starting non-terminal symbol.
      * @returns {Array<Number>} The follow set.
      */
-    _getFollowSet(symbol) {
+    _getFollowSet(symbol, startSymbol) {
         const follow = new Set();
+        if (symbol === startSymbol) { follow.add(Token.EOF); }
 
-        let symLiteral = "";
-        for (const [literal, val] of Object.entries(this.symbolTable)) {
-            if (val == symbol) {
-                symLiteral = literal;
-            }
-        }
-        if (symLiteral.slice(-1) === "_") { follow.add(Token.EOF); }
-        
-        for (const [lhs, rules] of Object.entries(this.productionRules)) {
-            for (const rule of rules) {
-                for (let i = 0; i < rule.length; i++) {
-                    if (rule[i] !== symbol) { continue; }
+        //get the rules that contain the symbol
+        const rules = this._terminalToRules[symbol] || new Set();
+        for (const rule of rules) {
+            const rhs = rule.rhs;
+            const lhs = rule.lhs;
+            for (let i = 0; i < rhs.length; i++) {
+                if (rhs[i] !== symbol) { continue; }
 
-                    const nextSymbol = rule[i + 1] || null;
-                    if (nextSymbol) {
-                        if (this.productionRules[nextSymbol]) {
-                            const childFirst = this._getFirstSet(nextSymbol);
-                            childFirst.forEach((f) => {if (f != Token.EMPTY) follow.add(f)});
-                            //we also need to consider if the next thing could be empty
-                            for (const aRule of this.productionRules[nextSymbol]) {
-                                for (const sym of aRule) {
-                                    if (sym === Token.EMPTY) {
-                                        const advSymbol = rule[i + 2] || null;
-                                        if (advSymbol) {
-                                            const nextFirst = this._getFirstSet(advSymbol);
-                                            nextFirst.forEach((f) => {if (f != Token.EMPTY) follow.add(f)});
-                                        } else if (Number(lhs) !== nextSymbol) {
-                                            const parentFollow = this._getFollowSet(Number(lhs));
-                                            parentFollow.forEach((f) => {follow.add(f)});
-                                        }
-                                        break;
-                                    }
-                                }
+                const nextSymbol = rhs[i + 1] || null;
+                if (nextSymbol) {
+                    if (this._nonTerminals.has(nextSymbol)) {
+                        const childFirst = this._getFirstSet(nextSymbol);
+                        for (const fst of childFirst) {
+                            if (fst === Token.EMPTY) {
+                                //if the first set contains an empty token, then the follow of the next symbol needs to be added too
+                                const advFollow = this._getFollowSet(nextSymbol, startSymbol);
+                                advFollow.forEach((f) => {follow.add(f)});
+                            } else {
+                                follow.add(fst);
                             }
-                        } else {
-                            follow.add(nextSymbol);
                         }
-                    } else if (Number(lhs) !== symbol) {
-                        const parentFollow = this._getFollowSet(Number(lhs));
-                        parentFollow.forEach((f) => {follow.add(f)});
+                    } else {
+                        follow.add(nextSymbol);
                     }
+                } else if (lhs !== symbol) {
+                    const parentFollow = this._getFollowSet(lhs, startSymbol);
+                    parentFollow.forEach((f) => {follow.add(f)});
                 }
             }
         }
@@ -507,7 +499,6 @@ export default class Generator {
         this.ast.off('nodeVisited', nodeVisted);
 
         //first pass
-        this.productionRules = {};
         let startSymbol = null;
         for (const i of linePositions) {
             const [start, end] = this._getIdentifierLiteral(i);
@@ -535,47 +526,34 @@ export default class Generator {
             }
         }
 
-        for (const rule of this._prodRules) {
-            const lhs = rule.lhs;
-            const rhs = rule.rhs;
-            if (!this.productionRules[lhs]) {
-                this.productionRules[lhs] = new Array();
-            }
-            this.productionRules[lhs].push(rhs);
-        }
-
         //second pass
-        for (const symbol of Object.keys(this.productionRules)) {
+        for (const symbol of this._nonTerminals) {
             const entry = {};
-            const first = this._getFirstSet(Number(symbol));
+            const first = this._getFirstSet(symbol);
 
-            //to get the parse table entry we need to loop through each first symbol in first
+            //loop through each symbol in the first set
             for (const fst of first) {
-                if (fst === Token.EMPTY) { continue; }
+                if (fst === Token.EMPTY) {
+                    //if this is an empty token then...
+                    //add the follows to the parse table
+                    const follow = this._getFollowSet(Number(symbol), startSymbol);
+                    follow.forEach((flw) => {entry[flw] = [Token.EMPTY]});
+                } else {
+                    //find the production rule that relates to this first symbol
+                    for (const rule of this._prodRules) {
+                        if (rule.lhs !== symbol) { continue; } //ignore rules that don't have the right lhs
 
-                //we find the production rule that relates to this first symbol
-                for (const rl of this.productionRules[symbol]) {
-                    const sym = rl[0];
-                    if (this.productionRules[sym]) {
-                        //if we are looking at a non-terminal, get the first set
-                        const childFirst = this._getFirstSet(sym);
-                        if (childFirst.includes(fst)) {
-                            //if this first set includes fst then we found the rule
-                            entry[fst] = rl;
-                        }
-                    } else {
-                        if (sym === fst) {
-                            entry[fst] = rl;
+                        const sym = rule.rhs[0];
+                        if (this._nonTerminals.has(sym)) {
+                            const childFirst = this._getFirstSet(sym);
+                            //if the non-terminal first set contains fst then we found the rule
+                            if (childFirst.includes(fst)) {
+                                entry[fst] = rule.rhs;
+                            }
+                        } else if (sym === fst) {
+                            entry[fst] = rule.rhs;
                         }
                     }
-                }
-            }
-
-            //if the first set includes an empty token then add follows to parse table
-            if (first.includes(Token.EMPTY)) {
-                const follow = this._getFollowSet(Number(symbol));
-                for (const flw of follow) {
-                    entry[flw] = [Token.EMPTY];
                 }
             }
 
