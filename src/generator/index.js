@@ -211,4 +211,4 @@ logTime("Parsing Complete", () => parser.parse());
 const parseTree = parser.getAST();
 const gen = new Generator(parseTree, source);
 
-gen.compile();
+logTime("Generation Complete", () => gen.compile());
