@@ -22,11 +22,6 @@ export default class Generator {
         this.tokenRegex = {};
 
         /**
-         * @type {Object.<number, Object.<number, Array<Number>>>} The generated parse table.
-         */
-        this.parseTable = {};
-
-        /**
          * @type {Number} A pointer to keep track of rule number.
          */
         this.rulePointer = 1;
@@ -487,6 +482,7 @@ export default class Generator {
          * @type {Array<Number>} The index positions of each line in the source text.
          */
         const linePositions = new Array();
+        const parseTable = {};
         //split lines based on the position of the grammar nodes
         const nodeVisted = (node) => {
             //ignore grammar nodes that are empty
@@ -557,10 +553,10 @@ export default class Generator {
                 }
             }
 
-            this.parseTable[symbol] = entry;
+            parseTable[symbol] = entry;
         }
 
         //then finally we can return the token regex and parse table.
-        return [this.tokenRegex, this.parseTable, startSymbol];
+        return [this.tokenRegex, parseTable, startSymbol];
     }
 }
